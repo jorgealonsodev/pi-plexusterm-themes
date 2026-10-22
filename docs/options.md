@@ -1,37 +1,29 @@
-# PlexusTerm theme: automatic attempt and manual recovery
+# PlexusTerm theme: registered resource and explicit reapply
 
-The chosen experience is **automatic-primary, manual-fallback**. These are two parts of one bounded feature, not mutually exclusive product alternatives. The automatic path is best-effort; the command is the user's explicit retry when startup cannot apply a useful snapshot or after Pi reloads.
+The approved behavior is one shared path: automatic startup and `/plexusterm-theme` both apply the already registered `plexusterm` theme object unchanged. The command is an explicit fallback/reapply, not a separate palette-conversion mode.
 
-## Packaged picker resource
+## Registered theme resource
 
-`themes/plexusterm.json` makes the name `plexusterm` available through Pi's ordinary theme picker. It is a neutral ANSI baseline, not a snapshot or a copied PlexusTerm/One Half palette: its foreground and background roles use terminal defaults, while color roles refer to ANSI indices 1–6 and 8. It does not force an appearance or export palette. Before a runtime snapshot, there is no guarantee that contrast, selection, or highlight colors will be complete or attractive in a particular terminal.
+`themes/plexusterm.json` exposes the name `plexusterm` through Pi's ordinary theme picker. Its ANSI indices and terminal-default values are interpreted by the terminal at render time. They are not a copied RGB palette, a snapshot of `system`, or a guarantee of contrast.
 
-Pi's normal picker selection persists the theme name as Pi normally does. Loading the package or running its extension does not select this theme for the user.
+Selecting `plexusterm` through Pi's normal picker uses Pi's ordinary selection persistence. Merely loading the package or running the extension does not select it or write settings.
 
-## Primary: startup snapshot (best effort)
+## Automatic startup
 
-On `session_start` with reason `startup`, and only in TUI mode, the extension first checks that `ctx.ui.theme.name` is exactly `plexusterm`. Only then does it read `ctx.ui.getTheme("system")`, convert the public resolved RGB values for all supported semantic tokens, and apply a new `Theme` object named `plexusterm` through `ctx.ui.setTheme(Theme)`.
+On a TUI `session_start` whose reason is `startup`, the extension first checks that `ctx.ui.theme.name` is exactly `plexusterm`. If so, it reads `ctx.ui.getTheme("plexusterm")` and passes that same object to `ctx.ui.setTheme(theme)`. A different selection, `/reload`, or non-TUI event does no theme work. No system lookup or theme construction occurs.
 
-This attempt:
+The automatic path reasserts the package's registered theme for the existing selected name. It neither changes the persisted choice nor claims to refresh all terminal or shell views. If the named resource is unavailable or application fails, the extension does not report success; a missing resource message points to loading the local package with `gentle-shell -e .`.
 
-- uses only colors Pi already exposes; it makes no terminal query, delay, poll, or private import;
-- does not modify the source `system` theme or persisted theme setting;
-- does nothing if another theme is active, if startup is not TUI, or if the event is `/reload`;
-- reports success only after Pi reports that the in-memory theme application succeeded;
-- leaves the packaged ANSI resource as the fallback and gives a manual retry instruction on unavailable colors or apply failure.
+## Explicit apply/reapply: `/plexusterm-theme`
 
-The public API does not establish a color-ready callback. The startup value may therefore be a fallback or otherwise stale snapshot, and a later terminal reply is not automatically recopied. No provenance is available to prove those colors came from PlexusTerm or to identify the PlexusTerm palette ID.
+Run `/plexusterm-theme` to apply the registered object for the current session, even if another theme is currently active. It uses the same exact object as automatic startup and does not save a theme name. Select `plexusterm` through the picker when a persistent choice is desired. After `/reload`, the command can reapply that same resource; it does not substitute the `system` theme or create a different appearance by RGB conversion.
 
-## Recovery: `/plexusterm-theme`
+`/plexusterm-theme help` explains the behavior. Unexpected arguments retain the existing usage rejection, and non-TUI invocation retains its existing warning. Lookup or application failures leave the extension without a success report; missing lookup instructs users to load the local package rather than retrying a missing name.
 
-Run `/plexusterm-theme` to explicitly retry the same snapshot using Pi's current public `system` theme values. Run it after `/reload` or if the startup colors look stale. `/plexusterm-theme help` explains the behavior; unexpected arguments are rejected.
+## Scope and evidence
 
-The command also applies an in-memory `Theme` object only. It does not persist a theme name or write global settings. If the user selected `plexusterm` in the picker earlier, that separate saved choice remains; a manual invocation by itself does not make the picker selection persistent. On Pi restart the package resource loads again, and the startup attempt runs only if `plexusterm` remains the selected theme.
+The extension uses only public Pi theme APIs and has no system-theme lookup, `Theme` constructor import, token arrays, color conversion, terminal query, settings write, timer, or shell-specific integration. The object reference and its ANSI/default sequences are tested across all 56 semantic roles, including the `toolPendingBg` and `toolSuccessBg` terminal-reset sequences and indexed green roles.
 
-The snapshot concretizes RGB values that Pi's source theme resolves from terminal defaults and faint roles. It preserves the public source appearance and color mode but cannot preserve byte-for-byte ANSI behavior or guarantee exact terminal rendering.
+Prior A/B/C screenshots showed the accepted appearance after reload (A/C) and a regression after the command (B: green editor and orange section labels). A synthetic public-API reproduction isolated the command's ANSI/default-to-concrete-RGB conversion. The new regression tests compare both startup and command application with a public `Theme` built from the repository JSON resource. These checks diagnose and prevent the object/escape-sequence mismatch; they are not a new live visual acceptance run.
 
-## Status and verification boundary
-
-The package manifest includes both the extension and the parent-owned JSON theme. Unit tests use Pi's public root `Theme` export and captured command/event registration with fake contexts. They cover startup-only activation, the selected-name guard, reload/non-TUI no-ops, all token values, and failure recovery. They do not prove the real PlexusTerm-to-Pi query/reply route, freshness, actual picker collision behavior, rendered colors, or behavior in a live session.
-
-Gentle Shell compatibility is intended through the same public Pi `Theme` and `setTheme` APIs; no shell-specific layer is used. Shell header/sidebar cached views and rendered appearance have not been verified. The user's report that the current shell runs in PlexusTerm is context, not evidence that this extension loaded or that Pi received PlexusTerm palette values. The package remains private, unpublished, and experimental. No One Half RGB palette is copied. See [PRD.md](../PRD.md) for the original named-theme acceptance criteria and evidence history.
+The package's tests do not prove terminal contrast, a specific rendered appearance, live palette updates, or that every Gentle Shell/Pi cached view refreshes. Human retesting in PlexusTerm/Gentle Shell remains separate; see [verification](verification.md).

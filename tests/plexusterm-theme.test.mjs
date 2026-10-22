@@ -24,12 +24,14 @@ const ALL_TOKENS = [
 const BACKGROUND_TOKENS = [
 	"selectedBg", "searchMatchBg", "userMessageBg", "customMessageBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg",
 ];
-const successMessage =
-	"Applied a PlexusTerm snapshot of Pi's current system theme for this session. Repeat /plexusterm-theme after /reload or restarting Pi if desired.";
-const automaticSuccessMessage =
-	"Applied a best-effort startup snapshot of Pi's current system theme. Run /plexusterm-theme after /reload or if the colors look stale.";
+const manualSuccessMessage =
+	'Applied the registered "plexusterm" theme for this session. Select "plexusterm" in Pi\'s theme picker to persist that choice.';
+const automaticSuccessMessage = 'Reapplied the registered "plexusterm" theme for this session.';
 const automaticWarningMessage =
-	"Automatic PlexusTerm snapshot was unavailable. The named ANSI fallback remains active; run /plexusterm-theme to retry from Pi's current system theme.";
+	'Could not reapply the registered "plexusterm" theme. Load the local package with `gentle-shell -e .` if the theme is unavailable.';
+const missingThemeMessage =
+	'Could not access the registered "plexusterm" theme; load the local package with `gentle-shell -e .` before using this command. No theme was applied.';
+const applyFailedMessage = 'Could not apply the registered "plexusterm" theme; no theme was applied.';
 
 async function registerCommand() {
 	const { registerPlexusTermThemeCommand } = await import(moduleUrl.href);
@@ -49,37 +51,62 @@ async function registerCommand() {
 			calls.push("registerTool");
 		},
 	};
-	registerPlexusTermThemeCommand(pi, Theme);
+
+	registerPlexusTermThemeCommand(pi);
 	assert.deepEqual(calls, ["registerCommand", "on:session_start"]);
 	assert.equal(registrations.length, 1);
 	assert.equal(registrations[0].name, "plexusterm-theme");
-	assert.ok(registrations[0].description.length > 20);
+	assert.match(registrations[0].description, /apply or reapply/i);
 	return { handler: registrations[0].handler, sessionStart: handlers.session_start };
 }
 
-function makeSource(appearance, seed, mode = "truecolor") {
-	const tokens = ALL_TOKENS;
-	const backgrounds = new Set(BACKGROUND_TOKENS);
-	const colorFor = (index) => {
-		const r = (seed + index * 37) % 256;
-		const g = (seed * 3 + index * 61) % 256;
-		const b = (seed * 7 + index * 83) % 256;
-		return `#${[r, g, b].map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+async function makeRegisteredPlexusTermTheme() {
+	const resource = JSON.parse(await readFile(new URL("../themes/plexusterm.json", import.meta.url), "utf8"));
+	const resolveVariable = (value) => {
+		let resolved = value;
+		while (typeof resolved === "string" && Object.hasOwn(resource.vars, resolved)) {
+			resolved = resource.vars[resolved];
+		}
+		return resolved;
 	};
+	const foreground = {};
+	const background = {};
+	for (const [token, value] of Object.entries(resource.colors)) {
+		if (BACKGROUND_TOKENS.includes(token)) {
+			background[token] = resolveVariable(value);
+		} else {
+			foreground[token] = resolveVariable(value);
+		}
+	}
+	return new Theme(foreground, background, "truecolor", {
+		name: resource.name,
+		appearance: resource.appearance,
+	});
+}
+
+function makeSyntheticSystemTheme(seed) {
 	const foreground = Object.fromEntries(
-		tokens.filter((token) => !backgrounds.has(token)).map((token, index) => [token, colorFor(index + 1)]),
+		ALL_TOKENS.filter((token) => !BACKGROUND_TOKENS.includes(token)).map((token, index) => [
+			token,
+			colorFor(seed + index + 1),
+		]),
 	);
 	const background = Object.fromEntries(
-		tokens.filter((token) => backgrounds.has(token)).map((token, index) => [token, colorFor(index + 101)]),
+		BACKGROUND_TOKENS.map((token, index) => [token, colorFor(seed + index + 101)]),
 	);
-	return new Theme(foreground, background, mode, { name: "system", appearance });
+	return new Theme(foreground, background, "truecolor", { name: "system", appearance: "dark" });
+}
+
+function colorFor(index) {
+	const channels = [(index * 37) % 256, (index * 61) % 256, (index * 83) % 256];
+	return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
 }
 
 function makeContext(
-	source,
+	themes,
 	{ mode = "tui", selectedName = "dark", setResult = { success: true }, setError, lookupError } = {},
 ) {
-	const priorTheme = { name: "prior-theme" };
+	const priorTheme = { name: selectedName };
 	const settings = { theme: "persisted-choice" };
 	const events = [];
 	const ctx = {
@@ -95,10 +122,11 @@ function makeContext(
 			getTheme(name) {
 				events.push({ type: "getTheme", name });
 				if (lookupError) throw lookupError;
-				return source;
+				return themes[name];
 			},
 			setTheme(theme) {
 				events.push({ type: "setTheme", theme });
+				if (!theme || typeof theme !== "object") throw new TypeError("setTheme must receive a Theme object");
 				if (setError) throw setError;
 				if (setResult.success) this.activeTheme = theme;
 				return setResult;
@@ -107,6 +135,12 @@ function makeContext(
 		},
 	};
 	return { ctx, events, priorTheme, settings };
+}
+
+function captureAnsi(theme) {
+	return Object.fromEntries(
+		ALL_TOKENS.map((token) => [token, BACKGROUND_TOKENS.includes(token) ? theme.getBgAnsi(token) : theme.getFgAnsi(token)]),
+	);
 }
 
 function notifications(events) {
@@ -119,9 +153,9 @@ function assertUnchanged(events, state, expectSetCall = false) {
 	assert.equal(events.some((event) => event.type === "setTheme"), expectSetCall);
 }
 
-test("package advertises the parent-owned ANSI fallback theme, not a fixed palette", async () => {
+test("package advertises the parent-owned terminal-relative theme resource", async () => {
 	const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
-	const fallback = JSON.parse(await readFile(new URL("../themes/plexusterm.json", import.meta.url), "utf8"));
+	const resource = JSON.parse(await readFile(new URL("../themes/plexusterm.json", import.meta.url), "utf8"));
 	assert.equal(packageJson.private, true);
 	assert.equal(packageJson.version, "0.1.0");
 	assert.deepEqual(packageJson.files, ["extensions", "themes", "README.md"]);
@@ -130,11 +164,11 @@ test("package advertises the parent-owned ANSI fallback theme, not a fixed palet
 	assert.deepEqual(packageJson.peerDependencies, { "@earendil-works/pi-coding-agent": "*" });
 	assert.deepEqual(packageJson.pi.themes, ["./themes/*.json"]);
 	assert.deepEqual(packageJson.pi.extensions, ["./extensions/plexusterm-theme/index.mjs"]);
-	assert.equal(fallback.name, "plexusterm");
-	assert.deepEqual(Object.keys(fallback.colors).sort(), [...ALL_TOKENS].sort());
-	assert.equal(fallback.appearance, undefined);
-	assert.equal(fallback.export, undefined);
-	assert.deepEqual(fallback.vars, {
+	assert.equal(resource.name, "plexusterm");
+	assert.deepEqual(Object.keys(resource.colors).sort(), [...ALL_TOKENS].sort());
+	assert.equal(resource.appearance, undefined);
+	assert.equal(resource.export, undefined);
+	assert.deepEqual(resource.vars, {
 		background: "",
 		foreground: "",
 		red: 1,
@@ -145,9 +179,9 @@ test("package advertises the parent-owned ANSI fallback theme, not a fixed palet
 		cyan: 6,
 		muted: 8,
 	});
-	for (const value of Object.values(fallback.colors)) {
+	for (const value of Object.values(resource.colors)) {
 		assert.equal(typeof value, "string");
-		assert.ok(Object.hasOwn(fallback.vars, value));
+		assert.ok(Object.hasOwn(resource.vars, value));
 	}
 });
 
@@ -156,130 +190,99 @@ test("extension registration only installs its command and startup handler", asy
 	assert.equal(typeof extension.sessionStart, "function");
 });
 
-test("startup applies a best-effort snapshot only when the named fallback is active", async () => {
+test("manual command reapplies the registered theme object with all 56 ANSI sequences unchanged", async () => {
+	const registeredTheme = await makeRegisteredPlexusTermTheme();
+	const systemTheme = makeSyntheticSystemTheme(193);
+	const { handler } = await registerCommand();
+	const state = makeContext({ plexusterm: registeredTheme, system: systemTheme });
+	const originalAnsi = captureAnsi(registeredTheme);
+
+	await handler("", state.ctx);
+
+	const appliedEvent = state.events.find((event) => event.type === "setTheme");
+	assert.ok(appliedEvent);
+	assert.equal(typeof appliedEvent.theme, "object");
+	assert.strictEqual(appliedEvent.theme, registeredTheme);
+	assert.deepEqual(captureAnsi(appliedEvent.theme), originalAnsi);
+	assert.equal(appliedEvent.theme.getBgAnsi("toolSuccessBg"), "\x1b[49m");
+	assert.equal(appliedEvent.theme.getBgAnsi("toolPendingBg"), "\x1b[49m");
+	assert.equal(appliedEvent.theme.getFgAnsi("mdHeading"), "\x1b[38;5;2m");
+	assert.deepEqual(captureAnsi(registeredTheme), originalAnsi);
+	assert.deepEqual(state.events.filter((event) => event.type === "getTheme").map((event) => event.name), ["plexusterm"]);
+	assert.deepEqual(notifications(state.events), [{ message: manualSuccessMessage, level: "info" }]);
+	assert.deepEqual(state.settings, { theme: "persisted-choice" });
+	assert.equal(state.ctx.ui.activeTheme, registeredTheme);
+});
+
+test("selected-theme startup reapplies the registered theme object with all ANSI sequences unchanged", async () => {
+	const registeredTheme = await makeRegisteredPlexusTermTheme();
+	const systemTheme = makeSyntheticSystemTheme(197);
 	const { sessionStart } = await registerCommand();
-	const source = makeSource("dark", 15);
-	const state = makeContext(source, { selectedName: "plexusterm" });
+	const state = makeContext(
+		{ plexusterm: registeredTheme, system: systemTheme },
+		{ selectedName: "plexusterm" },
+	);
+	const originalAnsi = captureAnsi(registeredTheme);
+
 	await sessionStart({ type: "session_start", reason: "startup" }, state.ctx);
-	const activeRead = state.events.findIndex((event) => event.type === "activeThemeRead");
-	const systemRead = state.events.findIndex((event) => event.type === "getTheme");
-	assert.ok(activeRead >= 0 && activeRead < systemRead, "check active name before reading system colors");
-	const applied = state.events.find((event) => event.type === "setTheme")?.theme;
-	assert.ok(applied instanceof Theme);
-	assert.equal(applied.name, "plexusterm");
-	assert.equal(applied.appearance, source.appearance);
-	assert.equal(applied.getColorMode(), source.getColorMode());
+
+	const appliedEvent = state.events.find((event) => event.type === "setTheme");
+	assert.ok(appliedEvent);
+	assert.strictEqual(appliedEvent.theme, registeredTheme);
+	assert.deepEqual(captureAnsi(appliedEvent.theme), originalAnsi);
+	assert.deepEqual(captureAnsi(registeredTheme), originalAnsi);
+	assert.deepEqual(state.events.filter((event) => event.type === "getTheme").map((event) => event.name), ["plexusterm"]);
 	assert.deepEqual(notifications(state.events), [{ message: automaticSuccessMessage, level: "info" }]);
 	assert.deepEqual(state.settings, { theme: "persisted-choice" });
 });
 
-test("startup ignores another selected theme; reload and non-TUI starts do no automatic work", async (t) => {
+test("automatic application ignores other selections, reload, and non-TUI sessions", async (t) => {
 	const { sessionStart } = await registerCommand();
 	await t.test("another theme is selected", async () => {
-		const state = makeContext(makeSource("dark", 25), { selectedName: "dark" });
+		const state = makeContext({ plexusterm: await makeRegisteredPlexusTermTheme() }, { selectedName: "dark" });
 		await sessionStart({ type: "session_start", reason: "startup" }, state.ctx);
 		assert.equal(state.events.filter((event) => event.type === "activeThemeRead").length, 1);
 		assert.equal(state.events.some((event) => event.type === "getTheme" || event.type === "setTheme"), false);
 		assert.deepEqual(notifications(state.events), []);
 	});
-	await t.test("reload does not snapshot potentially stale system colors", async () => {
-		const state = makeContext(makeSource("dark", 27), { selectedName: "plexusterm" });
+	await t.test("reload does not reapply automatically", async () => {
+		const state = makeContext({ plexusterm: await makeRegisteredPlexusTermTheme() }, { selectedName: "plexusterm" });
 		await sessionStart({ type: "session_start", reason: "reload" }, state.ctx);
-		assert.equal(state.events.some((event) => event.type === "activeThemeRead" || event.type === "getTheme" || event.type === "setTheme"), false);
+		assert.equal(
+			state.events.some((event) => event.type === "activeThemeRead" || event.type === "getTheme" || event.type === "setTheme"),
+			false,
+		);
 		assert.deepEqual(notifications(state.events), []);
 	});
-	await t.test("non-TUI mode does not inspect or change themes", async () => {
-		const state = makeContext(makeSource("dark", 29), { mode: "rpc", selectedName: "plexusterm" });
+	await t.test("non-TUI startup does not inspect or change themes", async () => {
+		const state = makeContext(
+			{ plexusterm: await makeRegisteredPlexusTermTheme() },
+			{ mode: "rpc", selectedName: "plexusterm" },
+		);
 		await sessionStart({ type: "session_start", reason: "startup" }, state.ctx);
-		assert.equal(state.events.some((event) => event.type === "activeThemeRead" || event.type === "getTheme" || event.type === "setTheme"), false);
+		assert.equal(
+			state.events.some((event) => event.type === "activeThemeRead" || event.type === "getTheme" || event.type === "setTheme"),
+			false,
+		);
 		assert.deepEqual(notifications(state.events), []);
 	});
 });
 
-test("automatic snapshot failures keep fallback and provide the manual retry", async (t) => {
-	const { sessionStart } = await registerCommand();
-	await t.test("system theme unavailable", async () => {
-		const state = makeContext(undefined, { selectedName: "plexusterm" });
-		await sessionStart({ type: "session_start", reason: "startup" }, state.ctx);
-		assertUnchanged(state.events, state);
-		assert.deepEqual(notifications(state.events), [{ message: automaticWarningMessage, level: "warning" }]);
-	});
-	await t.test("setTheme returns failure", async () => {
-		const state = makeContext(makeSource("dark", 35), {
-			selectedName: "plexusterm",
-			setResult: { success: false, error: "not applied" },
-		});
-		await sessionStart({ type: "session_start", reason: "startup" }, state.ctx);
-		assertUnchanged(state.events, state, true);
-		assert.deepEqual(notifications(state.events), [{ message: automaticWarningMessage, level: "warning" }]);
-	});
-	await t.test("setTheme throws", async () => {
-		const state = makeContext(makeSource("dark", 37), {
-			selectedName: "plexusterm",
-			setError: new Error("set failed"),
-		});
-		await sessionStart({ type: "session_start", reason: "startup" }, state.ctx);
-		assertUnchanged(state.events, state, true);
-		assert.deepEqual(notifications(state.events), [{ message: automaticWarningMessage, level: "warning" }]);
-	});
-});
-
-test("snapshots all public tokens for dark, light, and alternate-dark source themes", async (t) => {
-	const { handler } = await registerCommand();
-	const cases = [
-		{ label: "dark", appearance: "dark", seed: 13, mode: "truecolor" },
-		{ label: "light", appearance: "light", seed: 57, mode: "truecolor" },
-		{ label: "alternate dark", appearance: "dark", seed: 121, mode: "truecolor" },
-	];
-	const applied = [];
-
-	for (const item of cases) {
-		await t.test(item.label, async () => {
-			const source = makeSource(item.appearance, item.seed, item.mode);
-			const originalColors = Object.fromEntries(
-				Object.entries(source.colors).map(([token, color]) => [token, [color.r, color.g, color.b]]),
-			);
-			const state = makeContext(source);
-			await handler("", state.ctx);
-			const set = state.events.find((event) => event.type === "setTheme");
-			assert.ok(set, JSON.stringify(notifications(state.events)));
-			const snapshot = set.theme;
-			assert.ok(snapshot instanceof Theme);
-			assert.notEqual(snapshot, source);
-			assert.equal(snapshot.name, "plexusterm");
-			assert.equal(snapshot.appearance, source.appearance);
-			assert.equal(snapshot.getColorMode(), source.getColorMode());
-			assert.deepEqual(Object.keys(snapshot.colors).sort(), Object.keys(source.colors).sort());
-			assert.deepEqual(
-				Object.fromEntries(Object.entries(snapshot.colors).map(([token, color]) => [token, [color.r, color.g, color.b]])),
-				originalColors,
-			);
-			assert.deepEqual(notifications(state.events), [{ message: successMessage, level: "info" }]);
-			assert.deepEqual(state.settings, { theme: "persisted-choice" });
-			assert.deepEqual(
-				Object.fromEntries(Object.entries(source.colors).map(([token, color]) => [token, [color.r, color.g, color.b]])),
-				originalColors,
-			);
-			applied.push(snapshot);
-		});
-	}
-	assert.notDeepEqual(applied[0].colors.text, applied[2].colors.text);
-});
-
-test("help and unexpected arguments preserve the current theme without reading system colors", async () => {
+test("help and unexpected arguments preserve the current theme without theme reads", async () => {
 	const { handler } = await registerCommand();
 	for (const [args, expected] of [
 		[
 			"help",
 			{
 				message:
-					"/plexusterm-theme snapshots Pi's current system-theme colors into a PlexusTerm theme for this session only. It does not detect the terminal palette or persist a theme name. After /reload or restarting Pi, run /plexusterm-theme again if desired.",
+					'/plexusterm-theme applies or reapplies the registered "plexusterm" theme object unchanged for this session. It uses terminal ANSI/default colors, does not read the "system" theme, and does not persist a theme selection.',
 				level: "info",
 			},
 		],
 		["dark", { message: "Usage: /plexusterm-theme [help]", level: "warning" }],
+		["help extra", { message: "Usage: /plexusterm-theme [help]", level: "warning" }],
 	]) {
-		const state = makeContext(makeSource("dark", 21));
+		const state = makeContext({ plexusterm: await makeRegisteredPlexusTermTheme() });
 		await handler(args, state.ctx);
 		assertUnchanged(state.events, state);
 		assert.equal(state.events.some((event) => event.type === "getTheme"), false);
@@ -287,9 +290,9 @@ test("help and unexpected arguments preserve the current theme without reading s
 	}
 });
 
-test("non-TUI invocation reports inability without reading or applying a theme", async () => {
+test("non-TUI command invocation retains its warning and performs no theme reads", async () => {
 	const { handler } = await registerCommand();
-	const state = makeContext(makeSource("dark", 19), { mode: "rpc" });
+	const state = makeContext({ plexusterm: await makeRegisteredPlexusTermTheme() }, { mode: "rpc" });
 	await handler("", state.ctx);
 	assertUnchanged(state.events, state);
 	assert.equal(state.events.some((event) => event.type === "getTheme"), false);
@@ -298,69 +301,71 @@ test("non-TUI invocation reports inability without reading or applying a theme",
 	]);
 });
 
-test("missing or invalid system colors fail without success or selection mutation", async (t) => {
+test("missing or throwing named-theme lookups fail without applying or claiming success", async (t) => {
 	const { handler } = await registerCommand();
-	await t.test("missing system theme", async () => {
-		const state = makeContext(undefined);
+	await t.test("registered theme is missing", async () => {
+		const state = makeContext({});
 		await handler("", state.ctx);
 		assertUnchanged(state.events, state);
-		assert.deepEqual(notifications(state.events), [
-			{ message: "Could not read Pi's current system theme; no theme was applied.", level: "error" },
-		]);
+		assert.deepEqual(notifications(state.events), [{ message: missingThemeMessage, level: "error" }]);
 	});
-	await t.test("invalid RGB token", async () => {
-		const source = makeSource("dark", 31);
-		const invalid = {
-			appearance: source.appearance,
-			colors: { ...source.colors, accent: { r: 999, g: 0, b: 0 } },
-			getColorMode: () => source.getColorMode(),
-		};
-		const state = makeContext(invalid);
+	await t.test("lookup throws", async () => {
+		const state = makeContext({ plexusterm: await makeRegisteredPlexusTermTheme() }, { lookupError: new Error("lookup failed") });
 		await handler("", state.ctx);
 		assertUnchanged(state.events, state);
-		assert.deepEqual(notifications(state.events), [
-			{ message: "Could not create a valid PlexusTerm snapshot from Pi's system theme; no theme was applied.", level: "error" },
-		]);
-	});
-	await t.test("system lookup throws", async () => {
-		const state = makeContext(makeSource("dark", 33), { lookupError: new Error("lookup failed") });
-		await handler("", state.ctx);
-		assertUnchanged(state.events, state);
-		assert.deepEqual(notifications(state.events), [
-			{ message: "Could not read Pi's current system theme; no theme was applied.", level: "error" },
-		]);
-	});
-	await t.test("snapshot construction input throws", async () => {
-		const source = {
-			appearance: "dark",
-			colors: makeSource("dark", 39).colors,
-			getColorMode() {
-				throw new Error("mode unavailable");
-			},
-		};
-		const state = makeContext(source);
-		await handler("", state.ctx);
-		assertUnchanged(state.events, state);
-		assert.deepEqual(notifications(state.events), [
-			{ message: "Could not create a valid PlexusTerm snapshot from Pi's system theme; no theme was applied.", level: "error" },
-		]);
+		assert.deepEqual(notifications(state.events), [{ message: missingThemeMessage, level: "error" }]);
 	});
 });
 
-test("setTheme failure or exception never reports success or changes the prior selection", async (t) => {
+test("theme application failures or exceptions do not report success or change saved selection", async (t) => {
 	const { handler } = await registerCommand();
 	for (const failure of [
 		{ label: "false result", options: { setResult: { success: false, error: "not applied" } } },
 		{ label: "exception", options: { setError: new Error("set failed") } },
 	]) {
 		await t.test(failure.label, async () => {
-			const state = makeContext(makeSource("dark", 43), failure.options);
+			const state = makeContext({ plexusterm: await makeRegisteredPlexusTermTheme() }, failure.options);
 			await handler("", state.ctx);
 			assert.equal(state.events.filter((event) => event.type === "setTheme").length, 1);
 			assertUnchanged(state.events, state, true);
-			assert.deepEqual(notifications(state.events), [
-				{ message: "Could not apply the PlexusTerm snapshot; no theme was applied.", level: "error" },
-			]);
+			assert.deepEqual(notifications(state.events), [{ message: applyFailedMessage, level: "error" }]);
 		});
 	}
+});
+
+test("automatic lookup and apply failures retain the active theme and avoid false success", async (t) => {
+	const { sessionStart } = await registerCommand();
+	await t.test("registered theme is missing", async () => {
+		const state = makeContext({}, { selectedName: "plexusterm" });
+		await sessionStart({ type: "session_start", reason: "startup" }, state.ctx);
+		assertUnchanged(state.events, state);
+		assert.deepEqual(notifications(state.events), [{ message: automaticWarningMessage, level: "warning" }]);
+	});
+	await t.test("lookup throws", async () => {
+		const state = makeContext(
+			{ plexusterm: await makeRegisteredPlexusTermTheme() },
+			{ selectedName: "plexusterm", lookupError: new Error("lookup failed") },
+		);
+		await sessionStart({ type: "session_start", reason: "startup" }, state.ctx);
+		assertUnchanged(state.events, state);
+		assert.deepEqual(notifications(state.events), [{ message: automaticWarningMessage, level: "warning" }]);
+	});
+	await t.test("setTheme returns false", async () => {
+		const state = makeContext(
+			{ plexusterm: await makeRegisteredPlexusTermTheme() },
+			{ selectedName: "plexusterm", setResult: { success: false } },
+		);
+		await sessionStart({ type: "session_start", reason: "startup" }, state.ctx);
+		assertUnchanged(state.events, state, true);
+		assert.deepEqual(notifications(state.events), [{ message: automaticWarningMessage, level: "warning" }]);
+	});
+	await t.test("setTheme throws", async () => {
+		const state = makeContext(
+			{ plexusterm: await makeRegisteredPlexusTermTheme() },
+			{ selectedName: "plexusterm", setError: new Error("set failed") },
+		);
+		await sessionStart({ type: "session_start", reason: "startup" }, state.ctx);
+		assertUnchanged(state.events, state, true);
+		assert.deepEqual(notifications(state.events), [{ message: automaticWarningMessage, level: "warning" }]);
+	});
 });

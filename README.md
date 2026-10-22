@@ -2,13 +2,23 @@
 
 Use `plexusterm` to render Pi with terminal-default backgrounds and ANSI colors. Select it once for normal startup behavior; use `/plexusterm-theme` when you want to apply or reapply it for the current session.
 
-> **Version 0.1.0 — release candidate:** npm installation requires the package to be available in the public registry. Local usage is available from this checkout.
+> **Published:** `pi-plexusterm-themes@0.1.0` · MIT · Pi and Gentle Shell.
+
+## Quick start
+
+1. Install in the host you use:
+   - **Pi:** `pi install npm:pi-plexusterm-themes`
+   - **Gentle Shell:** `gentle-shell install npm:pi-plexusterm-themes`
+2. Open that host and select `/settings` → **Theme** → **plexusterm**.
+3. Keep the selection for future launches. Use `/plexusterm-theme` only when you want to apply or reapply it manually.
+
+**Expected result:** the theme uses the terminal's default foreground/background and ANSI palette. Automatic and manual application keep the same mapping; the command does not fetch a separate RGB palette.
 
 ## 1. Load the package
 
 Choose the host you actually use. Pi and Gentle Shell normally have separate package configurations.
 
-### Install from npm after publication
+### Install from npm
 
 For Pi:
 
@@ -96,6 +106,7 @@ The corrected manual behavior was visually accepted in one Gentle Shell/PlexusTe
 
 | Symptom | What to check |
 |---|---|
+| npm displays `Temporary Holding Version` / `0.0.0-stage` | That page shows npm's staging placeholder, not the verified `0.1.0` release. Check `npm view pi-plexusterm-themes version` and open the `0.1.0` version page. The public registry has the complete README; do not republish an unchanged version to fix a stale web page. |
 | `/plexusterm-theme` is unknown | Confirm the package is loaded in this host, not only in the other host. For local testing, launch from the package root with `-e .`, or use an absolute package path. Read any extension-loading errors printed at startup. |
 | `Theme not found: plexusterm` | Pi remembers the name but cannot find the resource in this invocation. Load/install the package in this host, or select another available theme. |
 | The theme is missing after restarting | A prior `-e .` was temporary. Repeat it or install the local/npm package for future launches. |

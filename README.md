@@ -1,34 +1,134 @@
-# PlexusTerm theme for Pi
+# PlexusTerm theme for Pi and Gentle Shell
 
-An experimental, dependency-free Pi package that exposes a terminal-relative theme named `plexusterm`. The extension reapplies the registered theme object unchanged at eligible startup and provides `/plexusterm-theme` as an explicit session-only apply/reapply command.
+Use `plexusterm` to render Pi with terminal-default backgrounds and ANSI colors. Select it once for normal startup behavior; use `/plexusterm-theme` when you want to apply or reapply it for the current session.
 
-## How it works
+> **Version 0.1.0 — release candidate:** npm installation requires the package to be available in the public registry. Local usage is available from this checkout.
 
-- `themes/plexusterm.json` is the registered picker resource. Its terminal-default and ANSI-indexed colors remain terminal-relative; it is not a copied RGB palette.
-- On TUI startup, if the active theme is already named `plexusterm`, the extension calls `ctx.ui.getTheme("plexusterm")` and passes that same object to `ctx.ui.setTheme(object)`. Other selected themes, reload events, and non-TUI sessions are unchanged.
-- `/plexusterm-theme` explicitly applies the registered `plexusterm` object, regardless of the currently selected theme. It does not persist a selection; choose `plexusterm` through Pi's normal theme picker if you want Pi to remember that name.
-- Neither path reads `system`, constructs or converts a theme, queries the terminal, writes settings, or changes a global theme selection.
+## 1. Load the package
 
-This preserves the resource's ANSI/default escape sequences, including terminal-reset backgrounds. It does not clone the terminal's system theme, guarantee contrast, or ensure every shell view refreshes. The extension reports success only when Pi reports that applying the object succeeded. If the named resource cannot be found, it instructs you to load the local package rather than retrying the lookup.
+Choose the host you actually use. Pi and Gentle Shell normally have separate package configurations.
 
-## Commands
+### Install from npm after publication
 
-From this package directory, load it locally with either host:
+For Pi:
+
+```sh
+pi install npm:pi-plexusterm-themes
+pi
+```
+
+For Gentle Shell:
+
+```sh
+gentle-shell install npm:pi-plexusterm-themes
+gentle-shell
+```
+
+Install in both hosts only if you use both. Installation makes resources available; it does not select the theme for you.
+
+### Try the local checkout without installing
+
+From this repository's root, choose one:
 
 ```sh
 pi -e .
+```
+
+```sh
 gentle-shell -e .
 ```
 
-Then select **plexusterm** in Pi's theme picker for automatic startup reapplication. You can also run `/plexusterm-theme` to apply or reapply the registered object for the current session, or `/plexusterm-theme help` for details. Unexpected arguments are rejected without reading or applying a theme.
+The dot means the current directory. From somewhere else, replace it with the absolute path to this package.
 
-The startup handler runs only for TUI `session_start` events whose reason is `startup` and whose active theme name is exactly `plexusterm`. It intentionally does nothing on `/reload`; after reload, use the command if you want to reapply the same registered resource. Loading the package or running the command does not persist the selected name.
+`-e` loads the package only for that invocation. Keep using it on subsequent launches, or register the local checkout permanently:
 
-## Boundaries
+```sh
+pi install /absolute/path/to/pi-plexusterm-themes
+```
 
-- The extension uses Pi's public `getTheme(name)` and `setTheme(Theme)` APIs. Gentle Shell compatibility is intended through these same APIs; no Gentle Shell-specific integration is present.
-- Tests use Pi's public `Theme` constructor and fake extension contexts. No live Pi, PlexusTerm, or Gentle Shell visual retest has been performed for this correction.
-- No exact contrast, live terminal palette update, or universal header/sidebar refresh is promised. A successful object application is not proof of pixel-level rendering.
-- This package is private and unpublished. It does not alter PlexusTerm, Pi host code, package dependencies, or user settings.
+```sh
+gentle-shell install /absolute/path/to/pi-plexusterm-themes
+```
 
-See [option and evidence notes](docs/options.md), [verification](docs/verification.md), and the [PRD](PRD.md).
+Pi resolves local packages directly from that checkout: keep the directory available. These are installation commands, not publication commands.
+
+## 2. Select the theme
+
+1. Open `/settings` in the interactive TUI.
+2. Open **Theme**.
+3. Select **plexusterm**.
+
+Pi saves the selection through its ordinary settings mechanism. On initial TUI startup, the extension reapplies the registered theme only if `plexusterm` is already active. It does not override another selected theme.
+
+A saved theme name does not install its package. If you used `-e .`, include that option next time as well.
+
+## 3. Use the command when needed
+
+| Command | Result |
+|---|---|
+| `/plexusterm-theme` | Apply or reapply the registered terminal-relative theme in the current session. |
+| `/plexusterm-theme help` | Explain the command without changing the theme. |
+| `/reload` | Reload host resources. The extension deliberately performs no automatic theme application during this event. |
+
+The manual command also works when another theme is active. It does **not** save the selection; use the picker if you want `plexusterm` after restarting.
+
+Automatic and manual application now use the same registered object. Running the command should not replace terminal-relative backgrounds with the old green RGB panel or change the mapping to Pi's `system` theme.
+
+## 4. Change the PlexusTerm palette
+
+1. Choose another color scheme in PlexusTerm.
+2. Inspect Pi or Gentle Shell. The terminal interprets the theme's ANSI indices and default foreground/background values.
+3. If a host view looks stale, try `/reload`.
+4. Optionally run `/plexusterm-theme` to reapply the same registered theme.
+
+The command does not query PlexusTerm, fetch colors, or clone `system`. Do not treat it as a palette detector. Some cached host views may need a process restart; no universal refresh behavior or exact contrast is guaranteed.
+
+## 5. Check that it worked
+
+- The theme picker lists `plexusterm`.
+- `/plexusterm-theme help` describes applying the registered theme, not creating a system snapshot.
+- Successful manual application reports: `Applied the registered "plexusterm" theme for this session.` followed by selection guidance.
+- Applying the command should retain the same terminal-relative mapping as the packaged theme loaded by `/reload`.
+
+The corrected manual behavior was visually accepted in one Gentle Shell/PlexusTerm session. That observation does not certify every palette, panel, restart, or terminal combination.
+
+## Troubleshooting
+
+| Symptom | What to check |
+|---|---|
+| `/plexusterm-theme` is unknown | Confirm the package is loaded in this host, not only in the other host. For local testing, launch from the package root with `-e .`, or use an absolute package path. Read any extension-loading errors printed at startup. |
+| `Theme not found: plexusterm` | Pi remembers the name but cannot find the resource in this invocation. Load/install the package in this host, or select another available theme. |
+| The theme is missing after restarting | A prior `-e .` was temporary. Repeat it or install the local/npm package for future launches. |
+| The command still mentions a system snapshot | Older extension code is loaded. Restart with the corrected package path; do not assume `/reload` replaces every module cache. |
+| A header or sidebar keeps old colors | This may be a host cache. Try `/reload`, then restart if needed. Report the host, affected view, and steps; do not assume the whole theme failed. |
+| The command is unavailable in RPC/headless mode | It requires the interactive TUI and deliberately does not apply a theme in non-TUI modes. |
+
+## Remove the package
+
+Select another available theme first. Then remove the same source you installed, in the relevant host.
+
+For an npm installation:
+
+```sh
+pi remove npm:pi-plexusterm-themes
+```
+
+```sh
+gentle-shell remove npm:pi-plexusterm-themes
+```
+
+For a local installation, use its installed source path instead. `pi list` or `gentle-shell list` shows the configured sources.
+
+If you only used `-e .`, there is no persistent package declaration to remove. Stop passing that option, but choose another theme first if `plexusterm` was saved as your default.
+
+## Compatibility and verification
+
+The package uses Pi's public theme APIs; no Gentle Shell-specific patch is required. Pi 1.2.0 is the tested API baseline. The host peer range is `*`, not a claim that every Pi or Gentle Shell version has been verified.
+
+The current suite passes 21 tests, including unchanged ANSI/default sequences for all 56 roles and guarded automatic/manual application. Resource loading and the theme schema have also been checked. Restart persistence, other palettes and every cached host view are not universally certified.
+
+The npm package contains the extension, theme, this standalone guide and the license. Additional design and evidence documents are available as `docs/options.md` and `docs/verification.md` in the source checkout, not in the tarball.
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2026 Jorge Alonso.

@@ -156,7 +156,10 @@ function assertUnchanged(events, state, expectSetCall = false) {
 test("package advertises the parent-owned terminal-relative theme resource", async () => {
 	const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 	const resource = JSON.parse(await readFile(new URL("../themes/plexusterm.json", import.meta.url), "utf8"));
-	assert.equal(packageJson.private, true);
+	assert.notEqual(packageJson.private, true);
+	assert.equal(packageJson.license, "MIT");
+	assert.deepEqual(packageJson.publishConfig, { registry: "https://registry.npmjs.org/", access: "public" });
+	assert.ok(packageJson.keywords.includes("pi-package"));
 	assert.equal(packageJson.version, "0.1.0");
 	assert.deepEqual(packageJson.files, ["extensions", "themes", "README.md"]);
 	assert.deepEqual(packageJson.scripts, { test: "node --test tests/*.test.mjs" });
